@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2021 XiaoMi, Inc.
@@ -47,8 +48,6 @@
 #define MAX_TOPOLOGY 5
 
 #define DSI_PANEL_DEFAULT_LABEL  "Default dsi panel"
-
-#define DEFAULT_MDP_TRANSFER_TIME 14000
 
 #define DEFAULT_PANEL_JITTER_NUMERATOR		2
 #define DEFAULT_PANEL_JITTER_DENOMINATOR	1
@@ -1038,6 +1037,9 @@ error:
 	return rc;
 }
 
+static unsigned int framerate_override;
+module_param(framerate_override, uint, 0444);
+
 static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 				  struct dsi_parser_utils *utils)
 {
@@ -1060,13 +1062,29 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 	}
 
 	mode->clk_rate_hz = !rc ? tmp64 : 0;
+	if (tmp64 == 1100000000 || tmp64 == 1103000000) {
+        if (framerate_override == 7)
+			mode->clk_rate_hz = 1650000000; // 90hz
+		else if (framerate_override == 6)
+			mode->clk_rate_hz = 1540000000; // 84hz
+		else if (framerate_override == 5)
+			mode->clk_rate_hz = 1485000000; // 81hz
+		else if (framerate_override == 4)
+			mode->clk_rate_hz = 1375000000; // 75hz
+		else if (framerate_override == 3)
+			mode->clk_rate_hz = 1320000000; // 72hz
+		else if (framerate_override == 2)
+			mode->clk_rate_hz = 1265000000; // 69hz
+		else if (framerate_override == 1)
+			mode->clk_rate_hz = 1210000000; // 66hz
+	}
 	display_mode->priv_info->clk_rate_hz = mode->clk_rate_hz;
 
 	rc = utils->read_u32(utils->data, "qcom,mdss-mdp-transfer-time-us",
 			&mode->mdp_transfer_time_us);
 	if (rc) {
 		pr_debug("fallback to default mdp-transfer-time-us\n");
-		mode->mdp_transfer_time_us = DEFAULT_MDP_TRANSFER_TIME;
+		mode->mdp_transfer_time_us = 0;
 	}
 	display_mode->priv_info->mdp_transfer_time_us =
 					mode->mdp_transfer_time_us;
@@ -1082,6 +1100,22 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 		pr_err("failed to read qcom,mdss-dsi-panel-framerate, rc=%d\n",
 		       rc);
 		goto error;
+	}
+	if (mode->refresh_rate == 60) {
+        if (framerate_override == 7)
+			mode->refresh_rate = 90;
+		else if (framerate_override == 6)
+			mode->refresh_rate = 84;
+		else if (framerate_override == 5)
+			mode->refresh_rate = 81;
+		else if (framerate_override == 4)
+			mode->refresh_rate = 75;
+		else if (framerate_override == 3)
+			mode->refresh_rate = 72;
+		else if (framerate_override == 2)
+			mode->refresh_rate = 69;
+		else if (framerate_override == 1)
+			mode->refresh_rate = 66;
 	}
 
 	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-panel-width",
@@ -1099,6 +1133,8 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 		       rc);
 		goto error;
 	}
+	if (framerate_override)
+		mode->h_front_porch = 32;
 
 	rc = utils->read_u32(utils->data,
 				"qcom,mdss-dsi-h-back-porch",
@@ -1108,6 +1144,8 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 		       rc);
 		goto error;
 	}
+	if (framerate_override)
+		mode->h_back_porch = 16;
 
 	rc = utils->read_u32(utils->data,
 				"qcom,mdss-dsi-h-pulse-width",
@@ -1117,6 +1155,8 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 		       rc);
 		goto error;
 	}
+	if (framerate_override)
+		mode->h_sync_width = 16;
 
 	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-h-sync-skew",
 				  &mode->h_skew);
@@ -1142,6 +1182,8 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 		       rc);
 		goto error;
 	}
+	if (framerate_override)
+		mode->v_back_porch = 16;
 
 	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-v-front-porch",
 				  &mode->v_front_porch);
@@ -1150,6 +1192,8 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 		       rc);
 		goto error;
 	}
+	if (framerate_override)
+		mode->v_front_porch = 8;
 
 	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-v-pulse-width",
 				  &mode->v_sync_width);
@@ -1158,6 +1202,8 @@ static int dsi_panel_parse_timing(struct dsi_mode_info *mode,
 		       rc);
 		goto error;
 	}
+	if (framerate_override)
+		mode->v_sync_width = 8;
 	pr_debug("panel vert active:%d front_portch:%d back_porch:%d pulse_width:%d\n",
 		mode->v_active, mode->v_front_porch, mode->v_back_porch,
 		mode->v_sync_width);
@@ -1181,6 +1227,8 @@ static int dsi_panel_parse_pixel_format(struct dsi_host_common_cfg *host,
 		       name, rc);
 		return rc;
 	}
+
+	host->bpp = bpp;
 
 	switch (bpp) {
 	case 3:
@@ -1222,6 +1270,7 @@ static int dsi_panel_parse_lane_states(struct dsi_host_common_cfg *host,
 {
 	int rc = 0;
 	bool lane_enabled;
+	u32 num_of_lanes = 0;
 
 	lane_enabled = utils->read_bool(utils->data,
 					    "qcom,mdss-dsi-lane-0-state");
@@ -1238,6 +1287,17 @@ static int dsi_panel_parse_lane_states(struct dsi_host_common_cfg *host,
 	lane_enabled = utils->read_bool(utils->data,
 					     "qcom,mdss-dsi-lane-3-state");
 	host->data_lanes |= (lane_enabled ? DSI_DATA_LANE_3 : 0);
+
+	if (host->data_lanes & DSI_DATA_LANE_0)
+		num_of_lanes++;
+	if (host->data_lanes & DSI_DATA_LANE_1)
+		num_of_lanes++;
+	if (host->data_lanes & DSI_DATA_LANE_2)
+		num_of_lanes++;
+	if (host->data_lanes & DSI_DATA_LANE_3)
+		num_of_lanes++;
+
+	host->num_data_lanes = num_of_lanes;
 
 	if (host->data_lanes == 0) {
 		pr_err("[%s] No data lanes are enabled, rc=%d\n", name, rc);
@@ -2896,9 +2956,6 @@ static int dsi_panel_parse_phy_timing(struct dsi_display_mode *mode,
 	u32 len, i;
 	int rc = 0;
 	struct dsi_display_mode_priv_info *priv_info;
-	u64 h_period, v_period;
-	u64 refresh_rate = TICKS_IN_MICRO_SECOND;
-	struct dsi_mode_info *timing = NULL;
 	u64 pixel_clk_khz;
 
 	if (!mode || !mode->priv_info)
@@ -2922,21 +2979,18 @@ static int dsi_panel_parse_phy_timing(struct dsi_display_mode *mode,
 		priv_info->phy_timing_len = len;
 	};
 
-	timing = &mode->timing;
-
-	if (panel_mode == DSI_OP_CMD_MODE) {
-		h_period = DSI_H_ACTIVE_DSC(timing);
-		v_period = timing->v_active;
-		do_div(refresh_rate, priv_info->mdp_transfer_time_us);
-	} else {
-		h_period = DSI_H_TOTAL_DSC(timing);
-		v_period = DSI_V_TOTAL(timing);
-		refresh_rate = timing->refresh_rate;
+	if (panel_mode == DSI_OP_VIDEO_MODE) {
+		/*
+		 *  For command mode we update the pclk as part of
+		 *  function dsi_panel_calc_dsi_transfer_time( )
+		 *  as we set it based on dsi clock or mdp transfer time.
+		 */
+		pixel_clk_khz = (DSI_H_TOTAL_DSC(&mode->timing) *
+				DSI_V_TOTAL(&mode->timing) *
+				mode->timing.refresh_rate);
+		do_div(pixel_clk_khz, 1000);
+		mode->pixel_clk_khz = pixel_clk_khz;
 	}
-
-	pixel_clk_khz = h_period * v_period * refresh_rate;
-	do_div(pixel_clk_khz, 1000);
-	mode->pixel_clk_khz = pixel_clk_khz;
 
 	return rc;
 }
@@ -4380,6 +4434,71 @@ void dsi_panel_put_mode(struct dsi_display_mode *mode)
 	}
 
 	kfree(mode->priv_info);
+}
+
+void dsi_panel_calc_dsi_transfer_time(struct dsi_host_common_cfg *config,
+			struct dsi_display_mode *mode, u32 frame_threshold_us)
+{
+	u32 frame_time_us, nslices;
+	u64 min_bitclk_hz, total_active_pixels, bits_per_line, pclk_rate_hz,
+		dsi_transfer_time_us, pixel_clk_khz;
+	struct msm_display_dsc_info *dsc = mode->timing.dsc;
+	struct dsi_mode_info *timing = &mode->timing;
+	struct dsi_display_mode *display_mode;
+
+	/* Packet overlead in bits,2 bytes header + 2 bytes checksum
+	 * + 1 byte dcs data command.
+	 */
+	const u32 packet_overhead = 56;
+
+	display_mode = container_of(timing, struct dsi_display_mode, timing);
+
+	frame_time_us = mult_frac(1000, 1000, (timing->refresh_rate));
+
+	if (timing->dsc_enabled) {
+		nslices = (timing->h_active)/(dsc->slice_width);
+		/* (slice width x bit-per-pixel + packet overhead) x
+		 * number of slices x height x fps / lane
+		 */
+		bits_per_line = ((dsc->slice_width * dsc->bpp) +
+				packet_overhead) * nslices;
+		bits_per_line = bits_per_line / (config->num_data_lanes);
+
+		min_bitclk_hz = (bits_per_line * timing->v_active *
+					timing->refresh_rate);
+	} else {
+		total_active_pixels = ((DSI_H_ACTIVE_DSC(timing)
+					* timing->v_active));
+		/* calculate the actual bitclk needed to transfer the frame */
+		min_bitclk_hz = (total_active_pixels * (timing->refresh_rate) *
+				(config->bpp));
+		do_div(min_bitclk_hz, config->num_data_lanes);
+	}
+
+	timing->min_dsi_clk_hz = min_bitclk_hz;
+
+	if (timing->clk_rate_hz) {
+		/* adjust the transfer time proportionately for bit clk*/
+		dsi_transfer_time_us = frame_time_us * min_bitclk_hz;
+		do_div(dsi_transfer_time_us, timing->clk_rate_hz);
+		timing->dsi_transfer_time_us = dsi_transfer_time_us;
+	} else if (mode->priv_info->mdp_transfer_time_us) {
+		timing->dsi_transfer_time_us =
+			mode->priv_info->mdp_transfer_time_us;
+	} else {
+		timing->dsi_transfer_time_us = frame_time_us -
+				frame_threshold_us;
+	}
+
+	/* Calculate pclk_khz to update modeinfo */
+	pclk_rate_hz =  min_bitclk_hz * frame_time_us;
+	do_div(pclk_rate_hz, timing->dsi_transfer_time_us);
+
+	pixel_clk_khz = pclk_rate_hz * config->num_data_lanes;
+	do_div(pixel_clk_khz, config->bpp);
+	display_mode->pixel_clk_khz = pixel_clk_khz;
+
+	display_mode->pixel_clk_khz = display_mode->pixel_clk_khz / 1000;
 }
 
 int dsi_panel_get_mode(struct dsi_panel *panel,
